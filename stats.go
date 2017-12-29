@@ -33,7 +33,7 @@ type InfluxDBConfig struct {
 
 type StatsConfig struct {
 	QueueSize     int
-	FlushDuration time.Duration // stats flush duration in milli seconds
+	FlushDuration time.Duration
 }
 
 type Stats struct {
