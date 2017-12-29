@@ -61,11 +61,12 @@ func main() {
 			case syscall.SIGTERM:
 				if err := s.Shutdown(nil); err != nil {
 					if err := s.Close(); err != nil {
-						log.Print(err)
 						ss.Close() // releases the resources and flush remaining data from channel, if any
-						os.Exit(1)
+						log.Fatal(err)
 					}
+					ss.Close()
 				}
+				ss.Close()
 			}
 		}
 	}(sigs)
