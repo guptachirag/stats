@@ -72,7 +72,9 @@ func main() {
 						ss.Close()
 						log.Fatal(err)
 					}
+					ss.Close()
 				}
+				ss.Close()
 			}
 		}
 	}(sigs)
