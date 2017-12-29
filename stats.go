@@ -51,14 +51,11 @@ type Stats struct {
 }
 
 func NewStats(sc *StatsConfig, ic *InfluxDBConfig, tags map[string]string) (*Stats, error) {
-	statsFlushDuration := sc.FlushDuration
-	if statsFlushDuration == 0 {
-		statsFlushDuration = 10 * time.Second
+	if sc.FlushDuration == 0 {
+		sc.FlushDuration = 10 * time.Second
 	}
-
-	statsQueueSize := sc.QueueSize
-	if statsQueueSize == 0 {
-		statsQueueSize = 1000
+	if sc.QueueSize == 0 {
+		sc.QueueSize = 1000
 	}
 
 	influxDBClient, err := influxdb.NewHTTPClient(
@@ -74,11 +71,11 @@ func NewStats(sc *StatsConfig, ic *InfluxDBConfig, tags map[string]string) (*Sta
 	ss := &Stats{
 		qpsStats:       make(map[string]*qps),
 		latencyStats:   make(map[string]*latency),
-		qpsQueue:       make(chan *qps, statsQueueSize),
-		latencyQueue:   make(chan *latency, statsQueueSize),
+		qpsQueue:       make(chan *qps, sc.QueueSize),
+		latencyQueue:   make(chan *latency, sc.QueueSize),
 		quit:           make(chan bool),
 		wg:             &sync.WaitGroup{},
-		ticker:         time.NewTicker(statsFlushDuration),
+		ticker:         time.NewTicker(sc.FlushDuration),
 		influxDBClient: influxDBClient,
 		influxDBConfig: ic,
 		statsConfig:    sc,
