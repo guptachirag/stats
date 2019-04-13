@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -18,7 +19,6 @@ type qps struct {
 
 type latency struct {
 	stat  string
-	count int64
 	delta time.Duration
 }
 
@@ -37,8 +37,8 @@ type StatsConfig struct {
 }
 
 type Stats struct {
-	qpsStats       map[string]*qps
-	latencyStats   map[string]*latency
+	qpsStats       map[string]int64
+	latencyStats   map[string][]time.Duration
 	qpsQueue       chan *qps
 	latencyQueue   chan *latency
 	quit           chan bool
@@ -69,8 +69,8 @@ func NewStats(sc *StatsConfig, ic *InfluxDBConfig, tags map[string]string) (*Sta
 	}
 
 	ss := &Stats{
-		qpsStats:       make(map[string]*qps),
-		latencyStats:   make(map[string]*latency),
+		qpsStats:       make(map[string]int64),
+		latencyStats:   make(map[string][]time.Duration),
 		qpsQueue:       make(chan *qps, sc.QueueSize),
 		latencyQueue:   make(chan *latency, sc.QueueSize),
 		quit:           make(chan bool),
@@ -146,25 +146,24 @@ func (ss *Stats) Incr(stat string, count int64) {
 }
 
 func (ss *Stats) Timing(stat string, delta time.Duration) {
-	ss.latencyQueue <- &latency{stat: stat, count: 1, delta: delta}
+	ss.latencyQueue <- &latency{stat: stat, delta: delta}
 }
 
 func (ss *Stats) processQPSStat(q *qps) {
-	s, ok := ss.qpsStats[q.stat]
+	count, ok := ss.qpsStats[q.stat]
 	if ok {
-		s.count = s.count + q.count
-	} else {
-		ss.qpsStats[q.stat] = q
+		q.count = q.count + count
 	}
+	ss.qpsStats[q.stat] = q.count
 }
 
 func (ss *Stats) processLatencyStat(l *latency) {
-	s, ok := ss.latencyStats[l.stat]
+	durations, ok := ss.latencyStats[l.stat]
 	if ok {
-		s.delta = s.delta + l.delta
-		s.count = s.count + l.count
+		durations = append(durations, l.delta)
+		ss.latencyStats[l.stat] = durations
 	} else {
-		ss.latencyStats[l.stat] = l
+		ss.latencyStats[l.stat] = []time.Duration{l.delta}
 	}
 }
 
@@ -174,12 +173,12 @@ func (ss *Stats) updateStats(quit bool) {
 		ss.influxDBClient.Close()
 	} else {
 		go ss.writeStatsToInfluxDB(ss.qpsStats, ss.latencyStats)
-		ss.qpsStats = make(map[string]*qps)
-		ss.latencyStats = make(map[string]*latency)
+		ss.qpsStats = make(map[string]int64)
+		ss.latencyStats = make(map[string][]time.Duration)
 	}
 }
 
-func (ss *Stats) writeStatsToInfluxDB(qpsStats map[string]*qps, latencyStats map[string]*latency) {
+func (ss *Stats) writeStatsToInfluxDB(qpsStats map[string]int64, latencyStats map[string][]time.Duration) {
 	bpts, err := influxdb.NewBatchPoints(influxdb.BatchPointsConfig{
 		Database:  ss.influxDBConfig.DB,
 		Precision: ss.influxDBConfig.Precision,
@@ -188,9 +187,9 @@ func (ss *Stats) writeStatsToInfluxDB(qpsStats map[string]*qps, latencyStats map
 		panic(err)
 	}
 
-	for stat, q := range qpsStats {
+	for stat, count := range qpsStats {
 		fields := make(map[string]interface{})
-		fields["value"] = q.count / int64(ss.statsConfig.FlushDuration/time.Second)
+		fields["value"] = count / int64(ss.statsConfig.FlushDuration/time.Second)
 		pt, err := influxdb.NewPoint(stat, ss.tags, fields, time.Now())
 		if err != nil {
 			panic(err)
@@ -198,9 +197,51 @@ func (ss *Stats) writeStatsToInfluxDB(qpsStats map[string]*qps, latencyStats map
 		bpts.AddPoint(pt)
 	}
 
-	for stat, l := range latencyStats {
+	for stat, durations := range latencyStats {
+
+		sort.Slice(durations, func(i, j int) bool {
+			return durations[i] <= durations[j]
+		})
+
+		lenDurations := len(durations)
+		sumDurations := int64(0)
+		for _, duration := range durations {
+			sumDurations += duration.Nanoseconds()
+		}
+
 		fields := make(map[string]interface{})
-		fields["value"] = l.delta.Nanoseconds() / l.count
+		fields["value"] = sumDurations / int64(lenDurations)
+
+		indexP50 := int(float64(lenDurations) * 0.5)
+		fields["value_p50"] = durations[indexP50].Nanoseconds()
+
+		indexP60 := int(float64(lenDurations) * 0.6)
+		fields["value_p60"] = durations[indexP60].Nanoseconds()
+
+		indexP70 := int(float64(lenDurations) * 0.7)
+		fields["value_p70"] = durations[indexP70].Nanoseconds()
+
+		indexP80 := int(float64(lenDurations) * 0.8)
+		fields["value_p80"] = durations[indexP80].Nanoseconds()
+
+		indexP90 := int(float64(lenDurations) * 0.9)
+		fields["value_p90"] = durations[indexP90].Nanoseconds()
+
+		indexP95 := int(float64(lenDurations) * 0.95)
+		fields["value_p95"] = durations[indexP95].Nanoseconds()
+
+		indexP98 := int(float64(lenDurations) * 0.98)
+		fields["value_p98"] = durations[indexP98].Nanoseconds()
+
+		indexP99 := int(float64(lenDurations) * 0.99)
+		fields["value_p99"] = durations[indexP99].Nanoseconds()
+
+		indexP999 := int(float64(lenDurations) * 0.999)
+		fields["value_p999"] = durations[indexP999].Nanoseconds()
+
+		indexP9999 := int(float64(lenDurations) * 0.9999)
+		fields["value_p9999"] = durations[indexP9999].Nanoseconds()
+
 		pt, err := influxdb.NewPoint(stat, ss.tags, fields, time.Now())
 		if err != nil {
 			panic(err)
